@@ -1,0 +1,119 @@
+version: "3.8"
+
+x-env: &common-env
+  env_file:
+      - path: ./.env.docker
+        required: true
+  restart: unless-stopped
+  stop_grace_period: 5s
+  networks:
+    - symfony
+
+x-build: &common-build
+  context: https://github.com/NicoDevelopp/docker.git#main:dockerfiles
+
+services:
+  db:
+    <<: *common-env
+    container_name: ${APP_NAME:-app}-db
+    hostname: ${APP_NAME:-app}-db
+    image: mariadb:latest
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    environment:
+      MYSQL_USER: ${DB_USER:-dbuser}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-dbpasswd}
+      MYSQL_DATABASE: ${DB_DATABASE:-dbname}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-dbpasswd}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+        test: [ "CMD", "healthcheck.sh", "--su-mysql", "--connect", "--innodb_initialized" ]
+        start_period: 1m
+        start_interval: 10s
+        interval: 1m
+        timeout: 5s
+        retries: 3
+
+  php:
+    <<: *common-env
+    container_name: ${APP_NAME:-app}-php
+    hostname: ${APP_NAME:-app}-php
+    image: nicodevelopp/php:${PHP_VERSION:-8.3}
+    build:
+      <<: *common-build
+      dockerfile: php.dockerfile
+      args:
+        - PHP_VERSION=${PHP_VERSION:-8.3}
+        - UID=${CURRENT_UID:-1000}
+        - GID=${CURRENT_GID:-1000}
+    volumes:
+      - ./:/var/www/html
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - ${PHPFPM_PORT:-9000}:9000
+      - ${XDEBUG_PORT:-9003}:9003
+
+  apache:
+    <<: *common-env
+    container_name: ${APP_NAME:-app}-apache
+    hostname: ${APP_NAME:-app}-apache
+    image: nicodevelopp/apache:latest
+    build:
+      <<: *common-build
+      dockerfile: apache.dockerfile
+    ports:
+      - ${HTTP_PORT:-8080}:80
+    depends_on:
+      - db
+      - php
+    environment:
+      - PHPFPM_PORT=${PHPFPM_PORT:-9000}
+    volumes:
+      - ./:/var/www/html
+      - /etc/timezone:/etc/timezone
+
+  node:
+    <<: *common-env
+    container_name: ${APP_NAME:-app}-node
+    hostname: ${APP_NAME:-app}-node
+    image: nicodevelopp/node:${NODE_VERSION:-20}
+    build:
+      <<: *common-build
+      dockerfile: node.dockerfile
+      args:
+        - NODE_VERSION=${NODE_VERSION:-20}
+    volumes:
+      - ./:/var/www/html
+
+  mailpit:
+    <<: *common-env
+    container_name: ${APP_NAME:-app}-mailpit
+    hostname: ${APP_NAME:-app}-mailpit
+    image: axllent/mailpit
+    ports:
+      - ${WEBMAIL_PORT:-8025}:8025
+      - ${SMTP_PORT:-1025}:1025
+
+  phpmyadmin:
+    <<: *common-env
+    container_name: ${APP_NAME:-app}-pma
+    hostname: ${APP_NAME:-app}-pma
+    image: phpmyadmin/phpmyadmin:latest
+    ports:
+      - ${PMA_PORT:-9080}:80
+    environment:
+      - PMA_ARBITRARY=1
+      - PMA_HOST=db
+      - PMA_PORT=3306
+      - PMA_USER=${DB_USER:-dbuser}
+      - PMA_PASSWORD=${DB_PASSWORD:-dbpasswd}
+    depends_on:
+      - db
+
+volumes:
+  db-data:
+networks:
+  symfony:
+    driver: bridge
